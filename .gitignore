@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.env
+.env
+*.sqlite3
+*.db
+*.log
+*.egg-info/
+dist/
+build/
+
+# FastAPI / Uvicorn
+instance/
+*.pid
+
+# Streamlit
+.streamlit/config.toml
+.streamlit/*.json
+.streamlit/*.lock
+
+# Jupyter
+.ipynb_checkpoints
+
+# VSCode
+.vscode/
+
+# Entornos virtuales
+venv/
+env/
+.venv/
+.env/
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Datos
+data/*.csv
+data/*.xlsx
+data/*.json
+!data/README.md  # si quieres mantener un README con explicación de los datos
+
+# Cachés
+*.cache
+.cache/
+__pycache__/
+*.parquet
+*.feather
