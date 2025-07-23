@@ -21,7 +21,8 @@ def cargar_datos():
         return pd.DataFrame()
 
 # --- INTERFAZ CON TABS ---
-tab1, tab2 = st.tabs(["🧠 Asistente Conversacional", "📊 Análisis de Datos"])
+tab1, tab2, tab3 = st.tabs(["🧠 Asistente Conversacional", "📊 Análisis de Datos", "📁 Subir tus propios datos"])
+
 
 # 1. ASISTENTE CONVERSACIONAL
 with tab1:
@@ -123,3 +124,62 @@ with tab2:
 
     except Exception as e:
         st.error(f"No se pudo generar el análisis automático: {e}")
+
+
+# 3. CARGAR ARCHIVO PERSONAL
+with tab3:
+    st.subheader("Sube tu propio archivo CSV")
+
+    uploaded_file = st.file_uploader(
+        "Selecciona un archivo CSV con al menos una columna 'fecha' y una columna 'valor':",
+        type=["csv"]
+    )
+
+    if uploaded_file:
+        try:
+            df_custom = pd.read_csv(uploaded_file, parse_dates=["fecha"])
+            st.success("Datos cargados correctamente ✅")
+
+            # Análisis básico con los datos subidos
+            df_custom["año"] = df_custom["fecha"].dt.year
+
+            st.markdown("### Registros por año")
+            registros_por_año_custom = df_custom.groupby("año").size()
+            st.bar_chart(registros_por_año_custom)
+
+            st.markdown("### Variación de 'valor' a lo largo del tiempo")
+            fig_line_custom = px.line(df_custom, x="fecha", y="valor", title="Variación temporal del indicador 'valor'")
+            st.plotly_chart(fig_line_custom, use_container_width=True)
+
+            st.markdown("### Histograma de 'valor'")
+            fig_hist_custom = px.histogram(df_custom, x="valor", nbins=30)
+            st.plotly_chart(fig_hist_custom, use_container_width=True)
+
+            # Cálculo de indicadores (si existen las columnas)
+            total_dias = df_custom.shape[0]
+            dias_sin_agua = df_custom[df_custom["valor"] == 0].shape[0]
+            porcentaje_sin_agua = (dias_sin_agua / total_dias) * 100 if total_dias > 0 else 0
+
+            if "completo_mediciones" in df_custom.columns and "completo_umbral" in df_custom.columns:
+                fiabilidad = (df_custom["completo_mediciones"] >= df_custom["completo_umbral"]).sum() / total_dias * 100
+            else:
+                fiabilidad = None
+
+            st.markdown("### Resumen")
+            resumen = {
+                "Total de días registrados": total_dias,
+                "Días sin disponibilidad (valor=0)": dias_sin_agua,
+                "Porcentaje sin disponibilidad (%)": round(porcentaje_sin_agua, 2)
+            }
+
+            if fiabilidad is not None:
+                resumen["Fiabilidad (%)"] = round(fiabilidad, 2)
+            else:
+                resumen["Fiabilidad (%)"] = "Columna no encontrada"
+
+            st.json(resumen)
+
+        except Exception as e:
+            st.error(f"No se pudo analizar el archivo: {e}")
+    else:
+        st.info("Por favor, sube un archivo para comenzar el análisis.")
