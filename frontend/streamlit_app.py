@@ -3,83 +3,195 @@ import requests
 import pandas as pd
 import plotly.express as px
 import os
-from datetime import datetime
-import time
-import re  # import para validar email
 
 # Configuración de la app
 st.set_page_config(page_title="Asistente Sequía Calderón", page_icon="💧", layout="wide")
-st.title("Asistente de Análisis de Sequías - Calderón")
+st.title("💧 Asistente de Análisis de Sequías - Calderón")
 
 DATA_PATH = os.path.join("data", "C20-Calderón_Precipitación-Diario.csv")
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def cargar_datos():
     try:
         df = pd.read_csv(DATA_PATH, parse_dates=["fecha"])
         return df
     except Exception as e:
-        st.error(f"No se pudo cargar el archivo CSV: {e}")
+        st.error(f"❌ No se pudo cargar el archivo CSV: {e}")
         return pd.DataFrame()
 
-tab1, tab2, tab3 = st.tabs(["Asistente Conversacional", "Análisis de Datos", "Subir tus propios datos"])
+def interpretar_grafica(prompt: str, modelo: str) -> str:
+    try:
+        with st.spinner("Consultando al asistente IA..."):
+            response = requests.post(
+                "http://localhost:8000/chatbot",
+                json={"pregunta": prompt, "modelo": modelo.lower()},
+                timeout=20
+            )
+        if response.status_code == 200:
+            return response.json().get("respuesta", "Sin respuesta.")
+        else:
+            return f"Error: {response.status_code}"
+    except Exception as e:
+        return f"Error al conectar con el backend: {e}"
+
+# Inicializar estados de sesión para interpretaciones
+if "interpretaciones" not in st.session_state:
+    st.session_state.interpretaciones = {
+        "registros": "",
+        "tendencia": "",
+        "dispersion": "",
+        "histograma": ""
+    }
+
+tab1, tab2, tab3, tab4 = st.tabs(["🤖 Asistente Conversacional", "📡 Análisis de Datos", "⬆️ Subir tus propios datos", "📄 Generar Reporte y Enviar Correo"])
 
 with tab1:
-    st.subheader("Haz preguntas sobre la sequía o el suministro de agua")
-    pregunta = st.text_input("Tu pregunta:")
+    st.subheader("Haz preguntas sobre la sequía o el suministro de agua ❓")
 
-    if st.button("Preguntar"):
-        if not pregunta.strip():
+    if "historial" not in st.session_state:
+        st.session_state.historial = []
+
+    if "input_pregunta" not in st.session_state:
+        st.session_state.input_pregunta = ""
+
+    if "modelo_seleccionado" not in st.session_state:
+        st.session_state.modelo_seleccionado = "OpenAI"
+
+    modelo_opciones = ["OpenAI", "HuggingFace"]
+    modelo_elegido = st.selectbox(
+        "Selecciona el modelo de lenguaje:", 
+        modelo_opciones, 
+        index=modelo_opciones.index(st.session_state.modelo_seleccionado)
+    )
+    st.session_state.modelo_seleccionado = modelo_elegido
+
+    def enviar_pregunta():
+        pregunta = st.session_state.input_pregunta.strip()
+        if not pregunta:
             st.warning("Por favor, ingresa una pregunta válida.")
-        else:
+            return
+        try:
             with st.spinner("Consultando al asistente..."):
-                try:
-                    response = requests.post("http://localhost:8000/chatbot", json={"pregunta": pregunta})
-                    if response.status_code == 200:
-                        respuesta = response.json().get("respuesta", "Sin respuesta.")
-                        st.success("Asistente:")
-                        st.write(respuesta)
-                    else:
-                        st.error("Error al contactar con el backend.")
-                except Exception as e:
-                    st.error(f"No se pudo conectar con el backend: {e}")
+                response = requests.post(
+                    "http://localhost:8000/chatbot",
+                    json={"pregunta": pregunta, "modelo": st.session_state.modelo_seleccionado.lower()},
+                    timeout=15
+                )
+            if response.status_code == 200:
+                respuesta = response.json().get("respuesta", "Sin respuesta.")
+                st.session_state.historial.append({
+                    "pregunta": pregunta,
+                    "respuesta": respuesta,
+                    "modelo": st.session_state.modelo_seleccionado
+                })
+                st.session_state.input_pregunta = ""
+            else:
+                st.error(f"Error al contactar con el backend: {response.status_code}")
+        except requests.exceptions.Timeout:
+            st.error("El servidor no respondió a tiempo. Intenta de nuevo más tarde.")
+        except Exception as e:
+            st.error(f"No se pudo conectar con el backend: {e}")
+
+    st.text_input("Tu pregunta:", key="input_pregunta", on_change=enviar_pregunta)
+
+    for turno in st.session_state.historial:
+        st.markdown(f"**Modelo ({turno['modelo']}):**")
+        st.markdown(f"**Tú:** {turno['pregunta']}")
+        st.markdown(f"**Asistente:** {turno['respuesta']}")
+        st.markdown("---")
 
 with tab2:
-    st.subheader("Explora los datos históricos del suministro de agua")
+    st.subheader("💧 Explora los datos históricos del suministro de agua")
 
     df = cargar_datos()
     if df.empty:
         st.stop()
 
-    st.write("Columnas disponibles en el dataset:", df.columns.tolist())
-
-    if "fecha" not in df.columns or "valor" not in df.columns:
+    if not {"fecha", "valor"}.issubset(df.columns):
         st.error("El archivo debe contener las columnas 'fecha' y 'valor'.")
         st.stop()
 
     df["año"] = df["fecha"].dt.year
 
-    st.markdown("### Número de registros por año")
+    # Función local para solicitar interpretación y actualizar estado
+    def solicitar_interpretacion(clave, prompt):
+        resp = interpretar_grafica(prompt, st.session_state.modelo_seleccionado)
+        st.session_state.interpretaciones[clave] = resp
+
+    # Número de registros por año
+    st.markdown("📊 ### Número de registros por año")
     st.bar_chart(df.groupby("año").size())
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("Interpretar con IA - Registros por año"):
+            prompt = (
+                "Analiza el gráfico de barras titulado Número de registros por año. Describe la tendencia "
+                "del Número de registros desde 2020 hasta 2025. Específicamente, identifica el año con la menor "
+                "cantidad de registros, los años con la mayor cantidad consistente de registros y explica el cambio "
+                "aparente observado en el año 2025, teniendo en cuenta que los datos para 2025 podrían ser parciales. "
+                "Hipotetiza qué podría causar este patrón en el número de registros a lo largo de estos años."
+            )
+            solicitar_interpretacion("registros", prompt)
+    with col2:
+        if st.button("Limpiar interpretación - Registros"):
+            st.session_state.interpretaciones["registros"] = ""
 
-    st.markdown("### Variación de disponibilidad de agua a lo largo del tiempo")
-    st.plotly_chart(px.line(df, x="fecha", y="valor", title="Tendencia de 'valor'"), use_container_width=True)
+    if st.session_state.interpretaciones["registros"]:
+        st.info(st.session_state.interpretaciones["registros"])
 
-    st.markdown("### Dispersión de valores en el tiempo")
+    # Tendencia temporal
+    st.markdown("📊 ### Variación de disponibilidad de agua a lo largo del tiempo")
+    st.plotly_chart(px.line(df, x="fecha", y="valor", title="Tendencia de disponibilidad de agua"), use_container_width=True)
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("Interpretar con IA - Tendencia temporal"):
+            prompt = "Interpreta la tendencia de la disponibilidad de agua en Calderón según la gráfica de línea generada."
+            solicitar_interpretacion("tendencia", prompt)
+    with col2:
+        if st.button("Limpiar interpretación - Tendencia"):
+            st.session_state.interpretaciones["tendencia"] = ""
+
+    if st.session_state.interpretaciones["tendencia"]:
+        st.info(st.session_state.interpretaciones["tendencia"])
+
+    # Dispersión
+    st.markdown("📊 ### Dispersión de valores en el tiempo")
     st.plotly_chart(px.scatter(df, x="fecha", y="valor", title="Dispersión del indicador 'valor'"), use_container_width=True)
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("Interpretar con IA - Dispersión temporal"):
+            prompt = "Describe la dispersión de los valores de disponibilidad de agua en el tiempo en Calderón."
+            solicitar_interpretacion("dispersion", prompt)
+    with col2:
+        if st.button("Limpiar interpretación - Dispersión"):
+            st.session_state.interpretaciones["dispersion"] = ""
 
-    st.markdown("### Distribución del indicador 'valor' (Histograma)")
-    st.plotly_chart(px.histogram(df, x="valor", nbins=30), use_container_width=True)
+    if st.session_state.interpretaciones["dispersion"]:
+        st.info(st.session_state.interpretaciones["dispersion"])
 
-    st.markdown("### Resumen de indicadores")
+    # Histograma
+    st.markdown("📊 ### Distribución del indicador 'valor' (Histograma)")
+    st.plotly_chart(px.histogram(df, x="valor", nbins=30, title="Histograma de valores"), use_container_width=True)
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("Interpretar con IA - Histograma"):
+            prompt = "Analiza el histograma de distribución de valores de disponibilidad de agua en Calderón."
+            solicitar_interpretacion("histograma", prompt)
+    with col2:
+        if st.button("Limpiar interpretación - Histograma"):
+            st.session_state.interpretaciones["histograma"] = ""
+
+    if st.session_state.interpretaciones["histograma"]:
+        st.info(st.session_state.interpretaciones["histograma"])
+
+    # --- Resumen ---
     total_dias = df.shape[0]
     dias_sin_agua = df[df["valor"] == 0].shape[0]
     porcentaje_sin_agua = (dias_sin_agua / total_dias) * 100 if total_dias > 0 else 0
 
-    if "completo_mediciones" in df.columns and "completo_umbral" in df.columns:
+    fiabilidad = None
+    if {"completo_mediciones", "completo_umbral"}.issubset(df.columns):
         fiabilidad = (df["completo_mediciones"] >= df["completo_umbral"]).sum() / total_dias * 100
-    else:
-        fiabilidad = None
 
     resumen = {
         "Total de días registrados": total_dias,
@@ -87,115 +199,93 @@ with tab2:
         "Porcentaje sin disponibilidad (%)": round(porcentaje_sin_agua, 2),
         "Fiabilidad (%)": round(fiabilidad, 2) if fiabilidad is not None else "No disponible"
     }
+    st.markdown("### Resumen de indicadores")
     st.json(resumen)
 
-    st.markdown("### Generar y descargar reporte PDF")
-    if st.button("Generar reporte"):
-        progreso = st.progress(0)
-        status_text = st.empty()
-        for i in range(100):
-            time.sleep(0.02)  # Simula progreso
-            progreso.progress(i + 1)
-            status_text.text(f"Generando reporte... {i + 1}%")
-        
-        status_text.text("Solicitando reporte al backend...")
-        try:
-            response = requests.get("http://localhost:8000/reporte")
-            if response.status_code == 200:
-                file_path = f"reporte_sequia_{datetime.now().date()}.pdf"
-                with open(file_path, "wb") as f:
-                    f.write(response.content)
-                st.success("Reporte generado correctamente.")
-                with open(file_path, "rb") as f:
-                    st.download_button("Descargar Reporte PDF", f, file_name=file_path, mime="application/pdf")
-            else:
-                st.error("No se pudo generar el reporte.")
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-    # Formulario para enviar correo con reporte
-    st.markdown("### 📧 Enviar reporte de sequía por correo")
-
-    with st.form("form_envio_reporte"):
-        correo_destino = st.text_input("Ingresa el correo del destinatario")
-        enviar = st.form_submit_button("Enviar reporte")
-
-        email_pattern = r"[^@]+@[^@]+\.[^@]+"
-        if enviar:
-            if not correo_destino or not re.match(email_pattern, correo_destino):
-                st.warning("Por favor ingresa un correo válido.")
-            else:
-                progreso_envio = st.progress(0, text="Iniciando generación del reporte...")
-                try:
-                    # Simula progreso de generación
-                    for i in range(40):
-                        time.sleep(0.02)
-                        progreso_envio.progress(i + 1, text=f"Generando reporte... {i + 1}%")
-
-                    response = requests.post(
-                        "http://localhost:8000/reporte/enviar",
-                        json={"destinatario": correo_destino}
-                    )
-
-                    # Simula progreso de envío
-                    for i in range(40, 100):
-                        time.sleep(0.02)
-                        progreso_envio.progress(i + 1, text=f"Enviando correo... {i + 1}%")
-
-                    if response.status_code == 200:
-                        progreso_envio.progress(100, text="Reporte enviado con éxito.")
-                        st.success("✅ Correo enviado correctamente.")
-                    else:
-                        progreso_envio.empty()
-                        st.error(f"❌ Error al enviar el reporte: {response.text}")
-                except Exception as e:
-                    progreso_envio.empty()
-                    st.error(f"❌ No se pudo conectar al backend: {e}")
-
 with tab3:
-    st.subheader("Sube tu propio archivo CSV")
+    st.subheader("3️⃣ Análisis de archivo personalizado")
 
-    uploaded_file = st.file_uploader("Selecciona un CSV con columnas 'fecha' y 'valor':", type=["csv"])
+    archivo_cargado = st.file_uploader("Sube tu archivo CSV", type=["csv"])
+    
+    if archivo_cargado is not None:
+        df_personalizado = pd.read_csv(archivo_cargado)
+        
+        # Mostrar datos cargados
+        st.success("✅ Archivo cargado correctamente.")
+        st.dataframe(df_personalizado.head())
 
-    if uploaded_file:
-        try:
-            df_custom = pd.read_csv(uploaded_file, parse_dates=["fecha"])
-            if "fecha" not in df_custom.columns or "valor" not in df_custom.columns:
-                st.error("El archivo debe contener 'fecha' y 'valor'.")
-                st.stop()
+        # Mostrar gráfica
+        if "fecha" in df_personalizado.columns and "valor" in df_personalizado.columns:
+            df_personalizado["fecha"] = pd.to_datetime(df_personalizado["fecha"], errors="coerce")
+            st.line_chart(df_personalizado.set_index("fecha")["valor"])
 
-            df_custom["año"] = df_custom["fecha"].dt.year
-            st.success("Archivo cargado correctamente.")
+            # Construir prompt de análisis
+            prompt_analisis = (
+                f"Aquí tienes datos de disponibilidad de agua para Calderón:\n{df_personalizado.head(30).to_string(index=False)}\n\n"
+                "Por favor, proporciona un análisis técnico de la situación de sequía basándote en los datos proporcionados. "
+                "Incluye observaciones, posibles causas y recomendaciones."
+            )
 
-            st.markdown("### Registros por año")
-            st.bar_chart(df_custom.groupby("año").size())
+            # Mostrar botón para interpretación con modelo seleccionado
+            if st.button("🧠 Interpretar con IA"):
+                modelo = st.session_state.get("modelo_seleccionado", "openai").lower()
+                st.info(f"Generando análisis automático con el modelo: {modelo}...")
 
-            st.markdown("### Variación temporal de 'valor'")
-            st.plotly_chart(px.line(df_custom, x="fecha", y="valor", title="Tendencia"), use_container_width=True)
+                try:
+                    analisis_automatico = interpretar_grafica(prompt_analisis, modelo=modelo)
+                    st.markdown("### 🔍 Análisis generado por IA")
+                    st.write(analisis_automatico)
+                except Exception as e:
+                    st.error(f"❌ Error al generar el análisis con IA: {e}")
+        else:
+            st.warning("El archivo debe tener las columnas 'fecha' y 'valor'.")
 
-            st.markdown("### Histograma de valores")
-            st.plotly_chart(px.histogram(df_custom, x="valor", nbins=30), use_container_width=True)
+with tab4:
+    st.subheader("4️⃣ Generar Reporte PDF y Enviar por Correo")
 
-            total_dias = df_custom.shape[0]
-            dias_sin_agua = df_custom[df_custom["valor"] == 0].shape[0]
-            porcentaje_sin_agua = (dias_sin_agua / total_dias) * 100 if total_dias > 0 else 0
+    if "reporte_generado" not in st.session_state:
+        st.session_state.reporte_generado = False
 
-            if "completo_mediciones" in df_custom.columns and "completo_umbral" in df_custom.columns:
-                fiabilidad = (df_custom["completo_mediciones"] >= df_custom["completo_umbral"]).sum() / total_dias * 100
-            else:
-                fiabilidad = None
+    if st.button("📄 Generar Reporte PDF"):
+        with st.spinner("🚀 Generando reporte... por favor espera"):
+            try:
+                respuesta = requests.get("http://localhost:8000/reporte")
+                if respuesta.status_code == 200:
+                    with open("reporte_sequia.pdf", "wb") as f:
+                        f.write(respuesta.content)
+                    st.success("✅ Reporte generado exitosamente.")
+                    st.session_state.reporte_generado = True
+                else:
+                    st.error(f"❌ Error al generar el reporte: {respuesta.text}")
+            except Exception as e:
+                st.error(f"❌ No se pudo conectar con el backend: {e}")
 
-            resumen = {
-                "Total días": total_dias,
-                "Días sin agua": dias_sin_agua,
-                "Porcentaje sin disponibilidad": round(porcentaje_sin_agua, 2),
-                "Fiabilidad (%)": round(fiabilidad, 2) if fiabilidad is not None else "No disponible"
-            }
+    if st.session_state.reporte_generado:
+        with open("reporte_sequia.pdf", "rb") as pdf_file:
+            st.download_button(
+                label="📥 Descargar Reporte",
+                data=pdf_file,
+                file_name="reporte_sequia.pdf",
+                mime="application/pdf"
+            )
 
-            st.markdown("### Resumen")
-            st.json(resumen)
+    st.markdown("---")
 
-        except Exception as e:
-            st.error(f"No se pudo analizar el archivo: {e}")
-    else:
-        st.info("Sube un archivo para comenzar el análisis.")
+    st.markdown("### ✉️ Enviar Reporte por Correo")
+    email_destinatario = st.text_input("Ingrese correo del destinatario")
+
+    if st.button("📬 Enviar Correo"):
+        if not email_destinatario:
+            st.warning("⚠️ Debes ingresar un correo válido.")
+        else:
+            with st.spinner("🚀 Enviando correo..."):
+                try:
+                    payload = {"destinatario": email_destinatario}
+                    respuesta = requests.post("http://localhost:8000/reporte/enviar", json=payload)
+                    if respuesta.status_code == 200:
+                        st.success("✅ Correo enviado exitosamente.")
+                    else:
+                        st.error(f"❌ Error al enviar correo: {respuesta.text}")
+                except Exception as e:
+                    st.error(f"❌ Error de conexión con backend: {e}")
+

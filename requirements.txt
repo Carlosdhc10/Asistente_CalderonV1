@@ -10,3 +10,6 @@ streamlit
 python-dotenv
 smtplib
 email
+openai
+
+
